@@ -9,7 +9,8 @@ GET  /metrics                    -> counters, escalation rate, budget
 
 Core logic and all design decisions live in gateway.py. ANTHROPIC_API_KEY must be
 set. X-Client-Id is NOT authentication -- it just labels traffic for per-client
-monitoring and rate limiting (future). Missing header defaults to "anonymous".
+monitoring and rate limiting (future). It must be an OPAQUE TOKEN (never PII -- no
+emails/usernames): it is logged and shown in /metrics. Missing -> "anonymous".
 """
 import os
 import sys

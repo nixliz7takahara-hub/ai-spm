@@ -255,8 +255,32 @@ uvicorn service.app:app --port 8000   # POST /check {"input":"..."} (+X-Client-I
 python tests/test_gateway.py          # API-free tests (stubbed judge)
 ```
 
-Status: audit fixes implemented; `tests/test_gateway.py` is green with no API
-calls. Open: monitoring (sliding-window escalation rate + alert), then async.
+Status: audit fixes + monitoring implemented; `tests/test_gateway.py` 16/16 green,
+no API calls. Open: client rate limiting (increment D), then async if needed.
+
+### Monitoring (`/metrics` + alert log lines)
+
+Every signal derives from one in-memory deque of the last 100 judgments (plus a
+1,000-entry `(client_id, hash)` window). They reset on restart — the structured
+log is the durable record. `/metrics` returns, as JSON for humans + `jq`:
+`escalation_rate_window`, `escalated_verdict_dist`, `per_client_recent` (top 20 by
+recent escalations), `judge_error_rate_window`, `input_hash_dup_rate`, and two
+alerting flags.
+
+Alert log lines (hysteresis, min 30 samples): `escalation_alert` / `_clear` (fire
+>35%, clear <25%) and `judge_error_alert` / `_clear` (fire >10%, clear <5%). The
+judge-error alert is the signal for a 429 burst, which an attacker can trigger for
+free. These are *"go look"* signals, not a diagnosis.
+
+**Reading the escalated-verdict distribution needs a baseline.** The cascade clears
+many escalated inputs to benign by design, so a high `none` rate is normal. On the
+gold set, of 20 band escalations Sonnet's final verdict was none 5 / low 3 /
+medium 9 / high 3 — a **~25% baseline `none` rate**. A live `none` rate well above
+that suggests the benign input distribution has shifted; a surge concentrated on
+one `client_id` suggests a cost attack.
+
+`client_id` comes from the `X-Client-Id` header (**not** authentication). It must
+be an **opaque token, never PII** — it is logged and shown in `/metrics`.
 
 ## Spending credits safely
 
