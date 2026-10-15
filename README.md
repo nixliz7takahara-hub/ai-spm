@@ -264,13 +264,15 @@ Every signal derives from one in-memory deque of the last 100 judgments (plus a
 1,000-entry `(client_id, hash)` window). They reset on restart — the structured
 log is the durable record. `/metrics` returns, as JSON for humans + `jq`:
 `escalation_rate_window`, `escalated_verdict_dist`, `per_client_recent` (top 20 by
-recent escalations), `judge_error_rate_window`, `input_hash_dup_rate`, and two
-alerting flags.
+recent escalations), `judge_error_rate_window`, `sonnet_error_rate_window`,
+`input_hash_dup_rate`, and two alerting flags.
 
 Alert log lines (hysteresis, min 30 samples): `escalation_alert` / `_clear` (fire
 >35%, clear <25%) and `judge_error_alert` / `_clear` (fire >10%, clear <5%). The
-judge-error alert is the signal for a 429 burst, which an attacker can trigger for
-free. These are *"go look"* signals, not a diagnosis.
+judge-error rate counts *any-model* failures — including a Sonnet-only failure,
+where the escalation falls back to Haiku and precision silently drops (FPR 3.1% →
+9.4%). That is the signal for a 429 burst, which an attacker can trigger for free.
+These are *"go look"* signals, not a diagnosis.
 
 **Reading the escalated-verdict distribution needs a baseline.** The cascade clears
 many escalated inputs to benign by design, so a high `none` rate is normal. On the

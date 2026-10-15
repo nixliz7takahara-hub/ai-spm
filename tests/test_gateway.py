@@ -215,6 +215,21 @@ def test_input_hash_dup_rate():
     assert abs(dr - 0.6) < 1e-9, dr
 
 
+def test_sonnet_error_is_tracked_and_alerts():
+    # B-1: band escalation whose Sonnet call fails must be visible, not silent
+    _reset_monitor()
+    r = gateway.check("borderline MARK_LOW SONNET_ERR")
+    assert r["decision"] == "block" and r["sonnet_error"] is True
+    assert r["escalated"] is True and r["error"] is False, r
+    _reset_monitor()
+    evs = _run_capture(["borderline MARK_LOW SONNET_ERR"] * 35)
+    assert [e["event"] for e in evs].count("judge_error_alert") == 1, evs
+    m = gateway.metrics()
+    assert m["escalated_verdict_dist"] == {}, m          # Haiku verdicts excluded from dist
+    assert m["sonnet_error_rate_window"] == 1.0, m
+    assert m["judge_error_rate_window"] == 1.0, m
+
+
 _TESTS = [v for k, v in sorted(globals().items())
           if k.startswith("test_") and callable(v)]
 

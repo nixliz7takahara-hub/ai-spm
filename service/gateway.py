@@ -61,7 +61,8 @@ _MLOCK = threading.Lock()
 _B64 = re.compile(r"[A-Za-z0-9+/]{%d,}={0,2}" % MAX_B64_RUN)
 
 METRICS = {"requests": 0, "block": 0, "allow": 0, "reject": 0, "judged": 0,
-           "escalated": 0, "rescued": 0, "degraded": 0, "judge_error": 0}
+           "escalated": 0, "rescued": 0, "sonnet_error": 0, "degraded": 0,
+           "judge_error": 0}
 _JUDGED = collections.deque(maxlen=WINDOW)       # one record per judged request
 _HASH_WINDOW = collections.deque(maxlen=HASH_WINDOW)  # (client_id, input_hash), ALL requests
 _last_degraded = False
@@ -90,25 +91,27 @@ def _scope_violation(norm):
 def _cascade_live(norm):
     """Haiku first. Escalate to Sonnet on a low/medium band verdict (escalated) OR
     on a Haiku error (rescued). Returns
-    (verdict, escalated, rescued, cost, error, haiku_ms, sonnet_ms).
+    (verdict, escalated, rescued, cost, error, sonnet_error, haiku_ms, sonnet_ms).
     escalated = band escalation only; rescued = Haiku-error fallback; error = no
-    usable verdict (both models failed)."""
+    usable verdict (both models failed); sonnet_error = a band escalation whose
+    Sonnet call failed, so Haiku's verdict was kept (silent precision drop -- B-1)."""
     hv = layer2.judge_real(norm, model=HAIKU, record=False)
     h_ms = hv.get("_usage", {}).get("latency_ms")
     cost = hv.get("_usage", {}).get("cost_usd", 0.0)
     h_err = _is_error(hv)
     if not h_err and hv.get("risk") not in config.CASCADE_ESCALATE:
-        return hv, False, False, cost, False, h_ms, None
+        return hv, False, False, cost, False, False, h_ms, None
     sv = layer2.judge_real(norm, model=SONNET, record=False)
     s_ms = sv.get("_usage", {}).get("latency_ms")
     cost += sv.get("_usage", {}).get("cost_usd", 0.0)
     escalated = not h_err        # band-triggered call
     rescued = h_err              # error-triggered call
     if not _is_error(sv):
-        return sv, escalated, rescued, cost, False, h_ms, s_ms
+        return sv, escalated, rescued, cost, False, False, h_ms, s_ms
     if not h_err:
-        return hv, escalated, rescued, cost, False, h_ms, s_ms   # keep Haiku's verdict
-    return sv, escalated, rescued, cost, True, h_ms, s_ms         # both failed
+        # band escalation but Sonnet failed -> kept Haiku's verdict = SONNET_ERROR
+        return hv, escalated, rescued, cost, False, True, h_ms, s_ms
+    return sv, escalated, rescued, cost, True, False, h_ms, s_ms   # both failed = judge-error
 
 
 def _eval_alerts():
@@ -124,7 +127,8 @@ def _eval_alerts():
         elif esc < ESC_CLEAR and _esc_alerting:
             _esc_alerting = False
             evs.append(("escalation_alert_clear", esc, n))
-        jerr = sum(r["error"] for r in _JUDGED) / n
+        # any-model failure: judge-error (both) OR sonnet_error (Sonnet-only, B-1)
+        jerr = sum(1 for r in _JUDGED if r["error"] or r.get("sonnet_error")) / n
         if jerr > JERR_FIRE and not _jerr_alerting:
             _jerr_alerting = True
             evs.append(("judge_error_alert", jerr, n))
@@ -147,7 +151,7 @@ def _log_degraded_transition(exhausted):
 
 def _result(decision, verdict, layer, reason, client_id, ihash, degraded=False,
             risk=None, category=None, escalated=False, rescued=False, error=False,
-            cost=0.0, haiku_ms=None, sonnet_ms=None, t0=None):
+            sonnet_error=False, cost=0.0, haiku_ms=None, sonnet_ms=None, t0=None):
     events = []
     with _MLOCK:
         METRICS["requests"] += 1
@@ -160,12 +164,15 @@ def _result(decision, verdict, layer, reason, client_id, ihash, degraded=False,
             METRICS["escalated"] += 1
         if rescued:
             METRICS["rescued"] += 1
+        if sonnet_error:
+            METRICS["sonnet_error"] += 1
         if degraded:
             METRICS["degraded"] += 1
         _HASH_WINDOW.append((client_id, ihash))           # ALL requests
         if layer in ("cascade", "judge-error"):
             _JUDGED.append({"client": client_id, "escalated": escalated,
                             "rescued": rescued, "error": error,
+                            "sonnet_error": sonnet_error,
                             "final_risk": risk if risk else ("error" if error else "none")})
             events = _eval_alerts()
     rec = {
@@ -174,6 +181,7 @@ def _result(decision, verdict, layer, reason, client_id, ihash, degraded=False,
         "reason": (reason or "")[:300], "degraded": degraded,
         "risk": risk, "category": category,
         "escalated": escalated, "rescued": rescued,
+        "error": error, "sonnet_error": sonnet_error,
         "cost_usd": round(cost, 6), "haiku_ms": haiku_ms, "sonnet_ms": sonnet_ms,
         "latency_ms": round((time.time() - t0) * 1000, 1) if t0 else None,
     }
@@ -214,22 +222,26 @@ def check(text, client_id="anonymous"):
                        client_id, ihash, degraded=True, t0=t0)
 
     with _JUDGE_SEM:                                   # bound concurrency -> bound overshoot
-        final, escalated, rescued, cost, err, h_ms, s_ms = _cascade_live(norm)
+        final, escalated, rescued, cost, err, sonnet_error, h_ms, s_ms = _cascade_live(norm)
     sb.record(cost)
 
     if err:
         return _result("allow", None, "judge-error",
                        "judge failed (both models); Layer 1 only",
                        client_id, ihash, degraded=True, rescued=rescued, error=True,
-                       cost=cost, haiku_ms=h_ms, sonnet_ms=s_ms, t0=t0)
+                       sonnet_error=False, cost=cost, haiku_ms=h_ms, sonnet_ms=s_ms, t0=t0)
 
     risk = final.get("risk", "none")
     attack = RISK_RANK.get(risk, 0) >= CUT             # "unknown" never reaches here
+    reason = final.get("reasoning", "")
+    if sonnet_error:
+        reason = "sonnet escalation failed; kept Haiku verdict | " + reason
     return _result("block" if attack else "allow",
                    "attack" if attack else "benign",
-                   "cascade", final.get("reasoning", ""), client_id, ihash,
+                   "cascade", reason, client_id, ihash,
                    risk=risk, category=final.get("category"),
-                   escalated=escalated, rescued=rescued, cost=cost,
+                   escalated=escalated, rescued=rescued, error=False,
+                   sonnet_error=sonnet_error, cost=cost,
                    haiku_ms=h_ms, sonnet_ms=s_ms, t0=t0)
 
 
@@ -245,7 +257,8 @@ def metrics():
         hashes = list(_HASH_WINDOW)
         esc_alerting, jerr_alerting = _esc_alerting, _jerr_alerting
     n = len(judged) or 1
-    dist = collections.Counter(r["final_risk"] for r in judged if r["escalated"])
+    dist = collections.Counter(r["final_risk"] for r in judged
+                               if r["escalated"] and not r.get("sonnet_error"))
     pcr = collections.Counter(r["client"] for r in judged if r["escalated"])
     dup = round(1 - len(set(hashes)) / len(hashes), 3) if hashes else 0.0
     out["window_size"] = len(judged)
@@ -255,7 +268,10 @@ def metrics():
     out["escalated_verdict_dist"] = dict(dist)
     out["per_client_recent"] = [{"client_id": c, "escalated": k}
                                 for c, k in pcr.most_common(20)]
-    out["judge_error_rate_window"] = round(sum(r["error"] for r in judged) / n, 3)
+    out["judge_error_rate_window"] = round(
+        sum(1 for r in judged if r["error"] or r.get("sonnet_error")) / n, 3)
+    out["sonnet_error_rate_window"] = round(
+        sum(1 for r in judged if r.get("sonnet_error")) / n, 3)
     out["judge_error_alerting"] = jerr_alerting
     out["input_hash_dup_rate"] = dup
     out["budget"] = sb.status()
