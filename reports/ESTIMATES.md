@@ -35,3 +35,10 @@ reconcile against `budget_ledger.json` AFTER. $80 hard cap is absolute.
   Cumulative **$0.8951 / $80**.
 - Escalation rate + est. added cost per policy (user condition 3):
   esc `low`=9%/$0.04, `low`+`medium`=20%/$0.09, +`high`=30%/$0.13 per 100 cases.
+
+## 2026-10-15 - Service gateway smoke test (real cascade path)
+- 2 requests through the LIVE cascade. Records to `service/budget_state.json`, NOT
+  the eval ledger (which stays at $0.895).
+- Estimate: ~$0.004 expected, ~$0.01 ceiling.
+- ACTUAL: $0.004144 (benign $0.000139 + escalated attack $0.004005) — spot on.
+  Eval ledger unchanged at $0.895; the service day/month budget is separate.

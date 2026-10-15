@@ -81,8 +81,13 @@ def judge_mock(text):
     }
 
 
-def judge_real(text, model=None):
-    """Call the judge model with structured output. Needs ANTHROPIC_API_KEY."""
+def judge_real(text, model=None, record=True):
+    """Call the judge model with structured output. Needs ANTHROPIC_API_KEY.
+
+    record=True logs the cost to the eval ledger and enforces the eval cap. The
+    live gateway passes record=False and does its own per-request accounting from
+    the returned `_usage`.
+    """
     from anthropic import Anthropic, APIError, RateLimitError
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -91,7 +96,8 @@ def judge_real(text, model=None):
         )
 
     mdl = model or config.MODEL
-    budget.check_before_call()  # hard-cap guard BEFORE we spend anything
+    if record:
+        budget.check_before_call()  # eval hard-cap guard BEFORE we spend anything
     # An org-level (unscoped) key must name a workspace via header. Set
     # ANTHROPIC_WORKSPACE_ID (wrkspc_...) to use one. A workspace-scoped key
     # needs neither -- in that case leave the env var unset.
@@ -131,13 +137,14 @@ def judge_real(text, model=None):
                    "reasoning": "[error] model did not call the tool"}
 
     cost = budget.cost_of(resp.usage.input_tokens, resp.usage.output_tokens, mdl)
-    total = budget.record(resp.usage.input_tokens, resp.usage.output_tokens, mdl)
     verdict["_usage"] = {
         "input_tokens": resp.usage.input_tokens,
         "output_tokens": resp.usage.output_tokens,
         "cost_usd": round(cost, 6),
-        "cumulative_usd": round(total, 6),
     }
+    if record:
+        total = budget.record(resp.usage.input_tokens, resp.usage.output_tokens, mdl)
+        verdict["_usage"]["cumulative_usd"] = round(total, 6)
     return verdict
 
 

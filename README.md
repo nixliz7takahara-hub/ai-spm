@@ -222,6 +222,31 @@ This cascade is wired into the harness as `--judge cascade` (escalation band
 numbers above. It is the recommended production judge; single-model `--judge
 single` stays the cheap default for iteration.
 
+## Live gateway (`service/`, first increment)
+
+The eval harness proves the detector; `service/` turns it into a request/response
+gateway. Design decisions, all implemented:
+
+1. **Budget exhaustion → degrade to Layer-1-only** (never block-all), so a budget
+   attack can't become a denial of service.
+2. **Per-request budget**: each request's actual cost is charged against rolling
+   day/month caps (`service_budget.py`), separate from the eval ledger.
+3. **Escalation monitoring**: `/metrics` reports the live escalation rate.
+4. **Scope guard**: oversized input and oversized base64 blobs are rejected up
+   front; tool/document output is not accepted (indirect injection is out of scope,
+   CASE_STUDY §10).
+5. **No request-path cache**: the judge re-runs each time, so a repeated input
+   doesn't become a probing oracle.
+
+```bash
+pip install fastapi uvicorn
+uvicorn service.app:app --port 8000   # POST /check {"input":"..."}, GET /health, /metrics
+```
+
+Status: core logic validated end-to-end (scope / layer1 / degraded / live cascade).
+Open: async + streaming for throughput (current latency ~6s/request), and held-out
+validation of the escalation band.
+
 ## Spending credits safely
 
 - Your $100 lives as a credit balance on your Anthropic **Console** account.

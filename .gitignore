@@ -10,6 +10,7 @@ reports/budget_ledger.json
 reports/verdict_cache.json
 reports/misses_*.json
 reports/gold_review.csv
+service/budget_state.json
 
 # Downloaded / derived datasets (recreate with the ingest + build scripts).
 # Committed instead: the scripts, seed.jsonl, and gold_labels.jsonl (id->label only).
