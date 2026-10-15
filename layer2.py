@@ -7,6 +7,8 @@ Two modes:
              tracks token cost, and obeys the cumulative budget cap.
 """
 import os
+import threading
+import time
 
 import budget
 import config
@@ -81,6 +83,25 @@ def judge_mock(text):
     }
 
 
+_CLIENT = None
+_CLIENT_LOCK = threading.Lock()
+
+
+def _client():
+    """Module-level Anthropic client, reused across calls and threads (the SDK
+    client is thread-safe and pools connections). Avoids a TLS handshake per
+    request -- B1 audit 1-4."""
+    global _CLIENT
+    if _CLIENT is None:
+        with _CLIENT_LOCK:
+            if _CLIENT is None:
+                from anthropic import Anthropic
+                ws = os.environ.get("ANTHROPIC_WORKSPACE_ID")
+                _CLIENT = (Anthropic(default_headers={"anthropic-workspace-id": ws})
+                           if ws else Anthropic())
+    return _CLIENT
+
+
 def judge_real(text, model=None, record=True):
     """Call the judge model with structured output. Needs ANTHROPIC_API_KEY.
 
@@ -88,7 +109,7 @@ def judge_real(text, model=None, record=True):
     live gateway passes record=False and does its own per-request accounting from
     the returned `_usage`.
     """
-    from anthropic import Anthropic, APIError, RateLimitError
+    from anthropic import APIError, RateLimitError
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise RuntimeError(
@@ -98,15 +119,9 @@ def judge_real(text, model=None, record=True):
     mdl = model or config.MODEL
     if record:
         budget.check_before_call()  # eval hard-cap guard BEFORE we spend anything
-    # An org-level (unscoped) key must name a workspace via header. Set
-    # ANTHROPIC_WORKSPACE_ID (wrkspc_...) to use one. A workspace-scoped key
-    # needs neither -- in that case leave the env var unset.
-    ws = os.environ.get("ANTHROPIC_WORKSPACE_ID")
-    client = (
-        Anthropic(default_headers={"anthropic-workspace-id": ws}) if ws else Anthropic()
-    )
+    _t0 = time.time()
     try:
-        resp = client.messages.create(
+        resp = _client().messages.create(
             model=mdl,
             max_tokens=config.MAX_TOKENS,
             system=SYSTEM,
@@ -141,6 +156,7 @@ def judge_real(text, model=None, record=True):
         "input_tokens": resp.usage.input_tokens,
         "output_tokens": resp.usage.output_tokens,
         "cost_usd": round(cost, 6),
+        "latency_ms": round((time.time() - _t0) * 1000, 1),
     }
     if record:
         total = budget.record(resp.usage.input_tokens, resp.usage.output_tokens, mdl)

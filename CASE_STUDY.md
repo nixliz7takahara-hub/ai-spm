@@ -346,6 +346,9 @@ which means being clear about what it does and doesn't support.
 - **Two datasets, both English-centric** (with some German/Spanish/Chinese). The
   numbers may not transfer to other languages or to indirect/RAG injection, which
   isn't represented here.
+- **A deployment-layer gap** (not in these numbers): the gateway's base64 scope
+  check misses URL-safe base64 (`-`/`_`), which Layer 1 doesn't decode. Documented
+  as a known gap; fixing it in Layer 1 would re-open the measured results.
 
 ---
 

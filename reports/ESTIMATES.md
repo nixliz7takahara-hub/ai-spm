@@ -42,3 +42,12 @@ reconcile against `budget_ledger.json` AFTER. $80 hard cap is absolute.
 - Estimate: ~$0.004 expected, ~$0.01 ceiling.
 - ACTUAL: $0.004144 (benign $0.000139 + escalated attack $0.004005) — spot on.
   Eval ledger unchanged at $0.895; the service day/month budget is separate.
+
+## 2026-10-15 - Increment C: latency re-measure (2 live requests)
+- After the audit fixes, 2 live cascade requests to capture the Haiku/Sonnet
+  latency breakdown (client reused + per-model timing). Records to the service
+  budget, not the eval ledger.
+- Estimate: ~$0.005 expected, ~$0.01 ceiling.
+- ACTUAL: $0.004173 (2 requests). Latency = Haiku ~2.4s + Sonnet ~3.5s (sequential).
+  So the ~6s is two sequential model calls, not client overhead (client reuse fixed
+  that). async/streaming won't cut single-request latency -> deferred (verdict §5).

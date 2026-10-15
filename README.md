@@ -222,30 +222,41 @@ This cascade is wired into the harness as `--judge cascade` (escalation band
 numbers above. It is the recommended production judge; single-model `--judge
 single` stays the cheap default for iteration.
 
-## Live gateway (`service/`, first increment)
+## Live gateway (`service/`)
 
-The eval harness proves the detector; `service/` turns it into a request/response
-gateway. Design decisions, all implemented:
+The eval harness proves the detector; `service/` serves it over HTTP. Design
+decisions, hardened after a code audit (`reports/B1_AUDIT_VERDICT.md`):
 
-1. **Budget exhaustion → degrade to Layer-1-only** (never block-all), so a budget
-   attack can't become a denial of service.
-2. **Per-request budget**: each request's actual cost is charged against rolling
-   day/month caps (`service_budget.py`), separate from the eval ledger.
-3. **Escalation monitoring**: `/metrics` reports the live escalation rate.
-4. **Scope guard**: oversized input and oversized base64 blobs are rejected up
-   front; tool/document output is not accepted (indirect injection is out of scope,
-   CASE_STUDY §10).
-5. **No request-path cache**: the judge re-runs each time, so a repeated input
-   doesn't become a probing oracle.
+1. **Judge/budget unavailable → degrade to Layer-1-only** (`verdict: null`), never
+   block-all, so a budget attack can't become a denial of service. A judge error
+   degrades the same way (logged as `judge-error`) instead of silently passing as
+   benign.
+2. **Per-request budget** charged to rolling day/month caps (`service_budget.py`),
+   separate from the eval ledger. $1/day, $20/month (≈500 judgments/day). The month
+   cap plus the eval cap ($80) equal the $100 credit, but the two ledgers are
+   independent — nothing enforces a joint $100 ceiling.
+3. **The cap is soft** (checked once before the judge). A `threading.Lock` makes the
+   ledger read-modify-write atomic, and a judge-path `Semaphore` (default 8) bounds
+   the overshoot to ≈ concurrency × max per-request cost ≈ **$0.06**.
+4. **Scope guard runs after NFKC normalization** (full-width base64 folds to ASCII;
+   homoglyphs can multiply length); raw length is also capped at the HTTP layer.
+   Limits (normalized): 8,000 chars, 2,000-char base64 run. Tool/document output is
+   not accepted (indirect injection out of scope, CASE_STUDY §10). *Known gap:*
+   URL-safe base64 (`-`/`_`) isn't decoded by Layer 1 and slips the blob check.
+5. **No request-path cache.** Reasons: judge freshness (model/prompt changes apply
+   at once) and avoiding a cache key that indexes inputs which got through. (Probing
+   is better handled by per-client rate limiting — future work.)
+6. **Escalation band `low`+`medium`** — chosen on the gold set, held-out
+   confirmation pending (same caveat as CASE_STUDY §8).
 
 ```bash
 pip install fastapi uvicorn
-uvicorn service.app:app --port 8000   # POST /check {"input":"..."}, GET /health, /metrics
+uvicorn service.app:app --port 8000   # POST /check {"input":"..."} (+X-Client-Id), /health, /metrics
+python tests/test_gateway.py          # API-free tests (stubbed judge)
 ```
 
-Status: core logic validated end-to-end (scope / layer1 / degraded / live cascade).
-Open: async + streaming for throughput (current latency ~6s/request), and held-out
-validation of the escalation band.
+Status: audit fixes implemented; `tests/test_gateway.py` is green with no API
+calls. Open: monitoring (sliding-window escalation rate + alert), then async.
 
 ## Spending credits safely
 
