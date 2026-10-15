@@ -27,6 +27,10 @@ Those waypoints span different datasets and stages — that's the point, not a s
 before/after. This write-up is about how I got from the meaningless 100% to a
 number I'd sign.
 
+Then I deployed it, and the hard problem changed shape: not the detector's accuracy,
+but failure paths that quietly turn into *allow*. A separate, code-reading audit
+session caught three of them that my own brief had signed off as working (§10).
+
 Models used: `claude-haiku-5-5` and `claude-sonnet-5-5`. Everything is reproducible
 from the repo; datasets are Apache-2.0 and MIT.
 
@@ -210,7 +214,7 @@ produced by the AI assistant applying the rubric; I then spot-checked 20 myself,
 including all 12 that changed the original label, and agreed on every one. That
 raised my confidence meaningfully. It is **not** an independent inter-annotator
 study — one AI annotator and one non-expert human reviewer, 20 of 100 checked — and
-§10 says so plainly. Inflating it would undercut the one thing this write-up is about.
+§11 says so plainly. Inflating it would undercut the one thing this write-up is about.
 
 ---
 
@@ -288,10 +292,10 @@ and measured on the gold set* — structurally the thing I rejected prompt v2 fo
 Haiku-alone and Sonnet-alone rows are clean: their only tuned knob, the risk cutoff,
 was fixed on deepset's train split, not here. But the cascade's *band selection* is
 not held-out-validated, and the cascade policies differ by only 0–2 false positives
-on 64 benign — inside the interval §10 admits. So I report the **headline as
+on 64 benign — inside the interval §11 admits. So I report the **headline as
 Sonnet-alone, 88.9% / 3.1%** (no gold-set tuning), and treat the cascade as a *cost
 result*: it reproduces that precision while escalating only a fifth of inputs, with
-the band choice still to be confirmed on a held-out split (§12).
+the band choice still to be confirmed on a held-out split (§13).
 
 ---
 
@@ -328,7 +332,121 @@ only because the error-surfacing design is what made them cheap to find.
 
 ---
 
-## 10. Limitations and threats to validity
+## 10. Deploying it: a system that can quietly lie about its own health
+
+Part I was about trusting a number. Deploying the detector as a gateway raised a
+different, harder honesty problem. An offline eval either runs or it doesn't; a live
+service can *degrade* — get quietly worse — while still answering every request and
+still reporting that it's fine. Every failure I hit pointed the same way: toward
+silently saying *allow*.
+
+### 10.1 The budget cap was an attack surface
+
+The gateway has a spend cap. My first instinct — block everything once the budget is
+gone — is a free denial of service: send enough traffic to burn the day's budget and
+the gateway goes dark for everyone. A control I added for safety would have *become*
+the vulnerability. So, before writing the code, I had the project owner decide the
+exhaustion behaviour, and we chose to **degrade to Layer 1 only**, not block. Obvious
+injections are still caught for free; everything else is allowed; the service stays
+up. In the log it is one line:
+
+```
+{"layer": "layer1-degraded", "verdict": null, "degraded": true}
+```
+
+On your own gateway, `degraded: true` is the line to alert on — it means the AI judge
+is off and you're running on the cheap layer alone.
+
+### 10.2 A reviewer who runs the code beats a brief that says it works
+
+I wrote a review brief for the first gateway cut and signed off three design
+decisions as implemented and correct. A separate review then read the actual code and
+ran repro scripts, and all three were wrong: judge errors were recorded as
+`allow`/`benign`; the scope guard ran on the raw text *before* normalization, so
+full-width base64 slipped past; and the "synchronous" endpoint was actually run in a
+thread pool, so the budget cap didn't hold under concurrency. My brief was prose — it
+asserted; the code did something else. The repo went from **0 tests to 17**, so the
+next regression can't hide behind a confident paragraph.
+
+(Disclosure, in the spirit of the authorship note near the top: that reviewer was not
+an independent human expert. It was a separate AI session in a different context, plus
+my own go/no-go. The value was that *something else read the code and executed it* —
+the adversarial distance, not the reviewer's species. Weigh it as that.)
+
+### 10.3 Every failure path wanted to fail open — silently
+
+The three bugs were one bug in different clothes: on any failure, the gateway
+defaulted to *allow* and said nothing. The first instance was a judge error recorded
+as a clean verdict —
+
+```
+{"reason": "[error] RateLimitError: 429", "verdict": "benign"}
+```
+
+— so a burst of 429s (which an attacker can trigger for free) would pass traffic
+through while the log claimed it was all benign. I had hit this exact failure in the
+eval harness earlier; here it was again in production clothes. Even after I fixed the
+obvious case, a subtler one survived: when a band escalation's *Sonnet* call failed,
+the gateway kept Haiku's verdict and precision quietly fell from 3.1% to 9.4% false
+positives, with no error flag and the wrong model's verdict polluting the
+distribution. The fix is the same each time: make degradation **explicit** — a
+`verdict: null`, a named layer, an error flag, an alert — never a silent benign. Two
+tests pin it: `test_judge_error_both_fail_not_benign` and
+`test_sonnet_error_is_tracked_and_alerts`. On your own gateway, watch the judge-error
+rate, not just the allow rate: a service that fails open looks healthy from outside.
+
+### 10.4 A soft cap that actually holds — with a number
+
+My brief claimed the budget overshoot was "at most one request." Wrong, for the
+reason 10.2 found: the endpoint runs in a thread pool, so many requests pass the
+`can_spend()` check before any of them records a cost, and two threads reading and
+writing the ledger lose each other's updates. The cap wasn't soft; it was absent. A
+lock makes the ledger update atomic, and a semaphore caps concurrent judge calls at
+8, which turns the overshoot into a number I can state: **≈ 8 × $0.007 ≈ $0.06**. The
+spend carries Part I's discipline into production: every smoke run has an estimate
+and a reconciled actual in `reports/ESTIMATES.md` (the three deployment smokes were
+$0.004144, $0.004173, $0.004135 — each inside its ceiling).
+`test_parallel_budget_no_lost_update` runs ten threads and checks the ledger sums
+exactly.
+
+### 10.5 Monitoring that signals, not diagnoses
+
+The gateway watches itself but does not try to *diagnose* — it raises "go look"
+signals. Every metric derives from one deque of the last 100 judgments, under one
+lock, so the numbers are mutually consistent. Alerts use hysteresis (the escalation
+alert fires above 35% and clears below 25%) so a rate wobbling at the threshold
+doesn't spam the log. The trap: a rate means nothing without a baseline. The cascade
+clears many escalated inputs to benign *by design*, so a high `none` rate is normal —
+on the gold set, of 20 escalations Sonnet's verdict was none 5 / low 3 / medium 9 /
+high 3, a ~25% baseline none rate (n = 20; I *chose* these numbers from the gold set,
+I did not validate them on live traffic). A perfect classifier of *why* a rate moved
+would be furniture — weight nobody uses. A human reading
+
+```
+"escalation_rate_window": 0.52, "judge_error_rate_window": 0.14,
+"per_client_recent": [{"client_id": "...", "escalated": 48}]
+```
+
+can tell a cost attack (one client, errors up) from a distribution shift (spread out,
+none-rate up) in seconds.
+
+### 10.6 What I chose not to build
+
+I measured single-request latency before deciding on async: ~2.4s Haiku + ~3.5s
+Sonnet, run sequentially (n = 2 smoke requests, not a benchmark). Async doesn't shrink
+a sequential dependency, and streaming is useless when the verdict is a JSON object
+you need in full — so async waits until there are enough concurrent users to need it.
+Per-client rate limiting waits the same way: it's the right next thing, but it earns
+its place when there are readers, not before. The request path has no cache on
+purpose — judge freshness, and a cache key would become a stored index of exactly the
+inputs that got through. Gaps I'm not hiding: URL-safe base64 (`-`/`_`) isn't decoded,
+and indirect (RAG) injection is out of scope entirely. The point of this project was
+never a deployed product; it was learning what the number is worth, and writing that
+down.
+
+---
+
+## 11. Limitations and threats to validity
 
 Stated directly, because the point of the whole exercise is a number I'd defend —
 which means being clear about what it does and doesn't support.
@@ -349,10 +467,16 @@ which means being clear about what it does and doesn't support.
 - **A deployment-layer gap** (not in these numbers): the gateway's base64 scope
   check misses URL-safe base64 (`-`/`_`), which Layer 1 doesn't decode. Documented
   as a known gap; fixing it in Layer 1 would re-open the measured results.
+- **The deployment numbers are 2-request smokes**, not a benchmark. The latency
+  split (~2.4s Haiku + ~3.5s Sonnet) and the per-request costs come from n = 2 live
+  calls; they say the pipeline works, not how it behaves under load.
+- **The gateway's thresholds and baseline aren't validated on real traffic.** The
+  alert cutoffs (35%/25% escalation, 10%/5% judge-error) and the ~25% baseline
+  `none` rate (n = 20) are chosen, not measured against a live distribution.
 
 ---
 
-## 11. Reproduce it
+## 12. Reproduce it
 
 ```bash
 pip install -r requirements.txt          # anthropic, pandas, pyarrow, requests
@@ -363,6 +487,8 @@ python datasets/ingest_verazuo.py        # verazuo (parquet)
 python harness.py --mode mock            # free, offline smoke test
 python harness.py --dataset datasets/public_deepset.jsonl --split test --mode real
 python harness.py --dataset datasets/gold_set.jsonl --mode real --judge cascade
+
+python tests/test_gateway.py             # gateway tests, API-free (stubbed judge)
 ```
 
 The harness chooses the cutoff on train, reports on held-out test, caches every
@@ -376,14 +502,15 @@ attribution.
 
 ---
 
-## 12. What's next
+## 13. What's next
 
 - **Expand the gold set** (100 → 300) to tighten the confidence intervals — kept in
   reserve as the answer to "how do you know?" rather than done preemptively. It's
   also where the cascade's escalation band earns a held-out number: choose the band
   on one half, report on the other.
-- **Deploy** the detector as a service with per-request budget accounting and a
-  scope guard — a different engineering problem than batch evaluation.
+- **Deployed** as a gateway (`service/`): budget-gated cascade with Layer-1 degrade,
+  scope guard, per-request budget, and self-monitoring (§10). Remaining: per-client
+  rate limiting, once there are users to rate-limit.
 - **Apply the method, not just the tool.** The transferable result here isn't the
   88.9% — it's the workflow: distrust public labels, build a small rubric-based gold
   set, keep a held-out split, reject train-only gains, and track every dollar.

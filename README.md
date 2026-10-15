@@ -241,7 +241,7 @@ decisions, hardened after a code audit (`reports/B1_AUDIT_VERDICT.md`):
 4. **Scope guard runs after NFKC normalization** (full-width base64 folds to ASCII;
    homoglyphs can multiply length); raw length is also capped at the HTTP layer.
    Limits (normalized): 8,000 chars, 2,000-char base64 run. Tool/document output is
-   not accepted (indirect injection out of scope, CASE_STUDY §10). *Known gap:*
+   not accepted (indirect injection out of scope, CASE_STUDY §11). *Known gap:*
    URL-safe base64 (`-`/`_`) isn't decoded by Layer 1 and slips the blob check.
 5. **No request-path cache.** Reasons: judge freshness (model/prompt changes apply
    at once) and avoiding a cache key that indexes inputs which got through. (Probing
