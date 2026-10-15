@@ -28,8 +28,9 @@ before/after. This write-up is about how I got from the meaningless 100% to a
 number I'd sign.
 
 Then I deployed it, and the hard problem changed shape: not the detector's accuracy,
-but failure paths that quietly turn into *allow*. A separate, code-reading audit
-session caught three of them that my own brief had signed off as working (§10).
+but how the service fails. A separate, code-reading audit session caught three bugs
+my own brief had signed off as working — including the worst kind: a failure path
+that quietly turned into *allow* (§10).
 
 Models used: `claude-haiku-5-5` and `claude-sonnet-5-5`. Everything is reproducible
 from the repo; datasets are Apache-2.0 and MIT.
@@ -345,10 +346,10 @@ silently saying *allow*.
 The gateway has a spend cap. My first instinct — block everything once the budget is
 gone — is a free denial of service: send enough traffic to burn the day's budget and
 the gateway goes dark for everyone. A control I added for safety would have *become*
-the vulnerability. So, before writing the code, I had the project owner decide the
-exhaustion behaviour, and we chose to **degrade to Layer 1 only**, not block. Obvious
+the vulnerability. So, before writing any code, I made the exhaustion behaviour an explicit
+decision: **degrade to Layer 1 only**, not block. Obvious
 injections are still caught for free; everything else is allowed; the service stays
-up. In the log it is one line:
+up. In the log it is one line (abridged):
 
 ```
 {"layer": "layer1-degraded", "verdict": null, "degraded": true}
@@ -359,9 +360,10 @@ is off and you're running on the cheap layer alone.
 
 ### 10.2 A reviewer who runs the code beats a brief that says it works
 
-I wrote a review brief for the first gateway cut and signed off three design
-decisions as implemented and correct. A separate review then read the actual code and
-ran repro scripts, and all three were wrong: judge errors were recorded as
+I wrote a review brief for the first gateway cut, described five design decisions,
+and reported them implemented and verified. A separate review then read the code and
+ran repro scripts, and three of those implementation claims were false: judge errors
+were recorded as
 `allow`/`benign`; the scope guard ran on the raw text *before* normalization, so
 full-width base64 slipped past; and the "synchronous" endpoint was actually run in a
 thread pool, so the budget cap didn't hold under concurrency. My brief was prose — it
@@ -375,9 +377,10 @@ the adversarial distance, not the reviewer's species. Weigh it as that.)
 
 ### 10.3 Every failure path wanted to fail open — silently
 
-The three bugs were one bug in different clothes: on any failure, the gateway
-defaulted to *allow* and said nothing. The first instance was a judge error recorded
-as a clean verdict —
+The worst of the three — and a fourth found later — were the same bug in different
+clothes: a failure that quietly defaulted to *allow* and said nothing. The first was
+a judge error recorded as a clean verdict, reproduced in the audit with a stubbed
+judge error:
 
 ```
 {"reason": "[error] RateLimitError: 429", "verdict": "benign"}
@@ -387,9 +390,9 @@ as a clean verdict —
 through while the log claimed it was all benign. I had hit this exact failure in the
 eval harness earlier; here it was again in production clothes. Even after I fixed the
 obvious case, a subtler one survived: when a band escalation's *Sonnet* call failed,
-the gateway kept Haiku's verdict and precision quietly fell from 3.1% to 9.4% false
-positives, with no error flag and the wrong model's verdict polluting the
-distribution. The fix is the same each time: make degradation **explicit** — a
+the gateway kept Haiku's verdict and the false-positive rate would quietly revert
+from the cascade's 3.1% to Haiku-alone's 9.4%, with no error flag and the wrong
+model's verdict polluting the distribution. The fix is the same each time: make degradation **explicit** — a
 `verdict: null`, a named layer, an error flag, an alert — never a silent benign. Two
 tests pin it: `test_judge_error_both_fail_not_benign` and
 `test_sonnet_error_is_tracked_and_alerts`. On your own gateway, watch the judge-error
@@ -400,9 +403,10 @@ rate, not just the allow rate: a service that fails open looks healthy from outs
 My brief claimed the budget overshoot was "at most one request." Wrong, for the
 reason 10.2 found: the endpoint runs in a thread pool, so many requests pass the
 `can_spend()` check before any of them records a cost, and two threads reading and
-writing the ledger lose each other's updates. The cap wasn't soft; it was absent. A
-lock makes the ledger update atomic, and a semaphore caps concurrent judge calls at
-8, which turns the overshoot into a number I can state: **≈ 8 × $0.007 ≈ $0.06**. The
+writing the ledger lose each other's updates. The cap wasn't soft; it was bounded only by the thread pool — 40 × $0.007 (an
+8,000-char input through both models) ≈ $0.28 on a $1 day. A lock makes the ledger
+update atomic, and a semaphore caps concurrent judge calls at 8, which turns the
+overshoot into a number I can state: **≈ 8 × $0.007 ≈ $0.06**. The
 spend carries Part I's discipline into production: every smoke run has an estimate
 and a reconciled actual in `reports/ESTIMATES.md` (the three deployment smokes were
 $0.004144, $0.004173, $0.004135 — each inside its ceiling).
@@ -420,15 +424,15 @@ clears many escalated inputs to benign *by design*, so a high `none` rate is nor
 on the gold set, of 20 escalations Sonnet's verdict was none 5 / low 3 / medium 9 /
 high 3, a ~25% baseline none rate (n = 20; I *chose* these numbers from the gold set,
 I did not validate them on live traffic). A perfect classifier of *why* a rate moved
-would be furniture — weight nobody uses. A human reading
+would be furniture — weight nobody uses. A human reading — a made-up reading, to show the shape —
 
 ```
 "escalation_rate_window": 0.52, "judge_error_rate_window": 0.14,
 "per_client_recent": [{"client_id": "...", "escalated": 48}]
 ```
 
-can tell a cost attack (one client, errors up) from a distribution shift (spread out,
-none-rate up) in seconds.
+has something concrete to go and look at — one client and errors up points one way, a
+spread-out rise in the none-rate points the other. It is a pointer, not a verdict.
 
 ### 10.6 What I chose not to build
 
@@ -440,9 +444,7 @@ Per-client rate limiting waits the same way: it's the right next thing, but it e
 its place when there are readers, not before. The request path has no cache on
 purpose — judge freshness, and a cache key would become a stored index of exactly the
 inputs that got through. Gaps I'm not hiding: URL-safe base64 (`-`/`_`) isn't decoded,
-and indirect (RAG) injection is out of scope entirely. The point of this project was
-never a deployed product; it was learning what the number is worth, and writing that
-down.
+and indirect (RAG) injection is out of scope entirely.
 
 ---
 
