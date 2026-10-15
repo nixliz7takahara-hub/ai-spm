@@ -403,10 +403,10 @@ rate, not just the allow rate: a service that fails open looks healthy from outs
 My brief claimed the budget overshoot was "at most one request." Wrong, for the
 reason 10.2 found: the endpoint runs in a thread pool, so many requests pass the
 `can_spend()` check before any of them records a cost, and two threads reading and
-writing the ledger lose each other's updates. The cap wasn't soft; it was bounded only by the thread pool — 40 × $0.007 (an
-8,000-char input through both models) ≈ $0.28 on a $1 day. A lock makes the ledger
-update atomic, and a semaphore caps concurrent judge calls at 8, which turns the
-overshoot into a number I can state: **≈ 8 × $0.007 ≈ $0.06**. The
+writing the ledger lose each other's updates. The cap wasn't soft; it was bounded only by the thread pool — 40 × $0.007
+(an 8,000-char input through both models) ≈ $0.28 on a $1 day. A lock makes the
+ledger update atomic, and a semaphore caps concurrent judge calls at 8, which turns
+the overshoot into a number I can state: **≈ 8 × $0.007 ≈ $0.06**. The
 spend carries Part I's discipline into production: every smoke run has an estimate
 and a reconciled actual in `reports/ESTIMATES.md` (the three deployment smokes were
 $0.004144, $0.004173, $0.004135 — each inside its ceiling).
@@ -424,7 +424,7 @@ clears many escalated inputs to benign *by design*, so a high `none` rate is nor
 on the gold set, of 20 escalations Sonnet's verdict was none 5 / low 3 / medium 9 /
 high 3, a ~25% baseline none rate (n = 20; I *chose* these numbers from the gold set,
 I did not validate them on live traffic). A perfect classifier of *why* a rate moved
-would be furniture — weight nobody uses. A human reading — a made-up reading, to show the shape —
+would be furniture — weight nobody uses. A human looking at a reading like this one — made up, to show the shape —
 
 ```
 "escalation_rate_window": 0.52, "judge_error_rate_window": 0.14,
