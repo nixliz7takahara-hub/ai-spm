@@ -1,8 +1,20 @@
-# AI-SPM evaluation harness (prototype)
+# AI-SPM — measuring an LLM prompt-injection detector honestly
 
-A measurable LLM-input firewall. The point of this repo is not "I built a
-filter" — it is a **number you can defend**: *this detector catches X% of
-attacks at Y% false positives on a labeled set.*
+A layered prompt-injection / jailbreak detector (normalization + static rules → an AI
+judge → a Haiku↔Sonnet cascade), a reproducible evaluation harness, and a live
+gateway — all built to answer one question honestly: **can you trust the accuracy
+number you're about to put on it?**
+
+On a human-reviewed, held-out gold set: **88.9% detection, 3.1% false positives,
+94.1% precision**, for **~$0.91** of API spend. The interesting part wasn't the
+detector — it was discovering that public prompt-injection datasets are mislabeled in
+opposite directions, and getting to a number worth defending anyway.
+
+**→ Read the case study: [CASE_STUDY.md](CASE_STUDY.md)** — the full story: label
+noise, the changes I rejected, the cascade, and what deploying it taught me about a
+system that can quietly lie about its own health.
+
+---
 
 ## Layers
 

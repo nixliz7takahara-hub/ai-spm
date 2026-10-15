@@ -73,13 +73,15 @@ deployment numbers (latency, per-request cost) are 2-request smokes, not a bench
   `verdict_cache.json`, `service/budget_state.json`, `reports/report_*.json`,
   `gold_review.csv`, `misses_*.json`, `.env`, and the downloaded datasets are all in
   `.gitignore`. 36 files are tracked: source, docs, scripts, `gold_labels.jsonl`, `seed.jsonl`.
-- **Repo license** — there is no `LICENSE` file for the project itself. Dataset
-  licenses (deepset Apache-2.0, verazuo MIT) are cited in README and CASE_STUDY. A
-  repo license must be added before publishing if one is wanted.
-- **README top** — the README opens at `# AI-SPM evaluation harness (prototype)`;
-  it has no one-paragraph "what this is" intro or link to `CASE_STUDY.md` at the top.
-- **Audit-trail docs** — the `reports/*VERDICT*.md` / `*BRIEF*.md` / `CASE_STUDY_CH10_AUDIT.md`
-  files are tracked and describe the review process (including that the reviewer was a
-  separate AI session). Keeping or removing them from a public repo is an open choice.
+- **Repo license ✓** — `LICENSE` (MIT) added at repo root; **fill in the copyright
+  holder** (currently a placeholder). Dataset licenses (deepset Apache-2.0, verazuo
+  MIT) are cited in README/CASE_STUDY and the LICENSE data note; datasets are not
+  redistributed.
+- **README top ✓** — added a TL;DR with the headline numbers and a prominent link to
+  `CASE_STUDY.md`.
+- **Audit-trail docs** — kept, with an English index (`reports/README.md`) that
+  explains they are the review trail (Japanese working language; reviewer = a separate
+  AI session + owner go/no-go). Remove them if a public repo should omit internal
+  review; one `git rm` does it.
 - **Line endings** — git reports CRLF normalization warnings on commit (Windows). A
   `.gitattributes` with `* text=auto` would standardize this; cosmetic only.
