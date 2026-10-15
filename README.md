@@ -314,3 +314,11 @@ This is a *defensive* evaluator. If you later adapt it to test a third party's
 system, that is only permitted inside a bug-bounty / VDP program whose rules
 **explicitly allow automated testing**, and only against in-scope targets.
 "In scope" and "automation allowed" are two separate checks.
+
+## License & data
+
+The project's own code is **MIT** — see [`LICENSE`](LICENSE). The evaluation datasets
+are **not redistributed** here; the scripts in `datasets/` fetch them from source:
+`deepset/prompt-injections` (Apache-2.0) and `TrustAIRLab/in-the-wild-jailbreak-prompts`
+(MIT), both allowing commercial use with attribution. The committed
+`datasets/gold_labels.jsonl` holds only IDs and labels, no prompt text.
