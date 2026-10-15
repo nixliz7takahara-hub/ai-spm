@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+
+# Generated run artifacts (regenerable; keep your spend ledger private)
+reports/report_*.json
+reports/budget_ledger.json
+reports/verdict_cache.json
+reports/misses_*.json
+reports/gold_review.csv
+
+# Downloaded / derived datasets (recreate with the ingest + build scripts).
+# Committed instead: the scripts, seed.jsonl, and gold_labels.jsonl (id->label only).
+datasets/public_deepset.jsonl
+datasets/public_verazuo.jsonl
+datasets/verazuo_sample1k.jsonl
+datasets/gold_candidates.jsonl
+datasets/gold_set.jsonl

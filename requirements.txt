@@ -1,0 +1,5 @@
+anthropic
+# For ingesting public datasets from Hugging Face parquet files:
+pandas
+pyarrow
+requests
